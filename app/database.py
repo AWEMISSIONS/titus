@@ -201,6 +201,13 @@ class TitusDatabase:
                 (datetime.now().isoformat(timespec="seconds"), code),
             )
 
+    def update_identity_snapshot(self, code: str, snapshot_path: str):
+        with self.lock, self.conn:
+            self.conn.execute(
+                "UPDATE identities SET snapshot_path=? WHERE code=?",
+                (snapshot_path, code.upper()),
+            )
+
     def name_identity(self, code: str, name: str) -> bool:
         with self.lock, self.conn:
             cur = self.conn.execute(
