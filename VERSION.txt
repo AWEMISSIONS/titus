@@ -1,0 +1,2 @@
+Titus 1.0 — Daily Monitor
+Windows-first local AI monitoring and statistics dashboard
