@@ -105,11 +105,16 @@ class TitusUI:
         self.selected_event_code = ""
         self.selected_event_snapshot = ""
         self.alert_token = 0
+        self.current_weather = {
+            "condition": "Unknown", "confidence": 0.0, "rain_score": 0.0,
+            "cloud_score": 0.0, "storm_active": False, "brightness": 0.0,
+        }
 
         self._build_shell()
         self._build_monitor()
         self._build_events()
         self._build_insights()
+        self._build_weather()
         self._build_settings()
         self._show_view("monitor")
 
@@ -146,6 +151,7 @@ class TitusUI:
             ("monitor", "◉  Monitor"),
             ("events", "▤  Event Inbox"),
             ("insights", "▥  Insights"),
+            ("weather", "☁  Sky & Storm"),
             ("settings", "⚙  Settings"),
         ]:
             b = ctk.CTkButton(
@@ -198,6 +204,8 @@ class TitusUI:
             self._refresh_events()
         elif name == "insights":
             self._refresh_insights()
+        elif name == "weather":
+            self._refresh_weather_view()
         elif name == "monitor":
             self._refresh_monitor_cards()
 
@@ -266,6 +274,8 @@ class TitusUI:
             ("animals","Animals"),
             ("driveway","Driveway events"),
             ("max_speed","Fastest est. speed"),
+            ("weather","Sky / weather"),
+            ("lightning","Lightning today"),
             ("unreviewed","Needs review"),
         ]:
             card=ctk.CTkFrame(right,corner_radius=10)
@@ -508,9 +518,104 @@ class TitusUI:
                 parts.append(f"Activity is {change} events higher than yesterday's full-day total so far.")
             elif change<0:
                 parts.append(f"Activity is currently {abs(change)} events below yesterday's full-day total.")
+        weather=self.db.weather_summary_today()
+        lightning=self.db.lightning_stats_today()
+        if weather["dominant"]!="Unknown":
+            parts.append(f"The camera's dominant visual weather estimate today is {weather['dominant'].lower()}.")
+        if lightning["count"]:
+            parts.append(f"Titus detected {lightning['count']} likely lightning strike{'s' if lightning['count']!=1 else ''} today and saved {lightning['clips']} completed strike clip{'s' if lightning['clips']!=1 else ''}.")
         if s["unreviewed"]:
             parts.append(f"{s['unreviewed']} events have not been marked reviewed.")
         return "\n\n".join(parts)
+
+    # ------------------------------------------------------------------
+    # Sky & Storm
+    # ------------------------------------------------------------------
+    def _build_weather(self):
+        frame=ctk.CTkScrollableFrame(self.content,fg_color="#0d1117")
+        self.views["weather"]=frame
+
+        ctk.CTkLabel(frame,text="Sky & Storm",font=ctk.CTkFont(size=25,weight="bold")).pack(anchor="w",padx=16,pady=(16,4))
+        ctk.CTkLabel(
+            frame,
+            text=("Titus estimates visible conditions from the camera. Sunny / cloudy / rainy are camera-based estimates, "
+                  "so rain confidence can be lower if the lens cannot see sky or falling rain clearly."),
+            text_color="#9aa7b4",wraplength=980,justify="left"
+        ).pack(anchor="w",padx=16,pady=(0,12))
+
+        cards=ctk.CTkFrame(frame,fg_color="transparent")
+        cards.pack(fill="x",padx=12)
+        self.weather_cards={}
+        for key,title in [
+            ("condition","Current condition"),("confidence","Weather confidence"),
+            ("rain","Rain signal"),("lightning","Lightning today"),
+            ("storm","Storm status"),("clips","Saved strike clips")
+        ]:
+            card=ctk.CTkFrame(cards,corner_radius=12)
+            card.pack(side="left",fill="x",expand=True,padx=4,pady=4)
+            ctk.CTkLabel(card,text=title,text_color="#9aa7b4",font=ctk.CTkFont(size=11)).pack(pady=(10,2))
+            val=ctk.CTkLabel(card,text="—",font=ctk.CTkFont(size=21,weight="bold"))
+            val.pack(pady=(0,10))
+            self.weather_cards[key]=val
+
+        info=ctk.CTkFrame(frame,corner_radius=12)
+        info.pack(fill="x",padx=16,pady=10)
+        ctk.CTkLabel(info,text="Lightning capture",font=ctk.CTkFont(size=16,weight="bold")).pack(anchor="w",padx=12,pady=(12,4))
+        ctk.CTkLabel(
+            info,
+            text=("When Titus detects a scene-wide lightning flash, it counts the strike, saves a high-quality still, "
+                  "and stores a 5-second video clip using the full resolution of the active camera feed. "
+                  "The clip includes video from just before and just after the flash."),
+            text_color="#a8b4c2",wraplength=1050,justify="left"
+        ).pack(anchor="w",padx=12,pady=(0,12))
+
+        ctk.CTkLabel(frame,text="Lightning history",font=ctk.CTkFont(size=18,weight="bold")).pack(anchor="w",padx=16,pady=(8,6))
+        self.lightning_list=ctk.CTkScrollableFrame(frame,height=330,corner_radius=12)
+        self.lightning_list.pack(fill="both",expand=True,padx=16,pady=(0,12))
+        ctk.CTkButton(frame,text="Open lightning folder",command=self.open_lightning_folder).pack(anchor="w",padx=16,pady=(0,20))
+
+    def _refresh_weather_view(self):
+        if not hasattr(self,"weather_cards"):
+            return
+        ls=self.db.lightning_stats_today()
+        state=self.current_weather
+        self.weather_cards["condition"].configure(text=str(state.get("condition","Unknown")))
+        self.weather_cards["confidence"].configure(text=f"{float(state.get('confidence',0)):.0%}")
+        self.weather_cards["rain"].configure(text=f"{float(state.get('rain_score',0)):.0%}")
+        self.weather_cards["lightning"].configure(text=str(ls["count"]))
+        self.weather_cards["storm"].configure(text="ACTIVE" if state.get("storm_active") else "No")
+        self.weather_cards["clips"].configure(text=str(ls["clips"]))
+
+        for child in self.lightning_list.winfo_children():
+            child.destroy()
+        rows=self.db.lightning_events(200)
+        if not rows:
+            ctk.CTkLabel(self.lightning_list,text="No lightning strikes recorded yet.",text_color="#9aa7b4").pack(anchor="w",padx=8,pady=10)
+            return
+        for row in rows:
+            box=ctk.CTkFrame(self.lightning_list,corner_radius=9)
+            box.pack(fill="x",padx=3,pady=4)
+            title=f"⚡ {row['strike_code']}   {row['happened_at'].replace('T',' ')}"
+            ctk.CTkLabel(box,text=title,font=ctk.CTkFont(size=13,weight="bold")).pack(side="left",padx=10,pady=10)
+            ctk.CTkLabel(
+                box,text=f"{row['weather'] or 'Unknown'} • {row['confidence']:.0%}",
+                text_color="#9aa7b4"
+            ).pack(side="left",padx=6)
+            if row["clip_saved"] and row["clip_path"] and Path(row["clip_path"]).exists():
+                ctk.CTkButton(
+                    box,text="Play 5-sec clip",width=110,
+                    command=lambda p=row["clip_path"]:os.startfile(p)
+                ).pack(side="right",padx=5,pady=7)
+            if row["snapshot_path"] and Path(row["snapshot_path"]).exists():
+                ctk.CTkButton(
+                    box,text="Photo",width=65,fg_color="#374151",
+                    command=lambda p=row["snapshot_path"]:os.startfile(p)
+                ).pack(side="right",padx=5,pady=7)
+
+    def open_lightning_folder(self):
+        folder=self.app_dir/"data"/"lightning"
+        folder.mkdir(parents=True,exist_ok=True)
+        os.startfile(str(folder))
 
     # ------------------------------------------------------------------
     # Settings
@@ -542,6 +647,8 @@ class TitusUI:
         self.night_threshold_var=ctk.DoubleVar(value=float(s.get("night_threshold",78)))
         self.performance_var=ctk.StringVar(value=str(s.get("performance_mode","Balanced")))
         self.auto_start_var=ctk.BooleanVar(value=bool(s.get("auto_start_monitoring",False)))
+        self.weather_enabled_var=ctk.BooleanVar(value=bool(s.get("weather_enabled",True)))
+        self.lightning_enabled_var=ctk.BooleanVar(value=bool(s.get("lightning_enabled",True)))
 
         ctk.CTkLabel(general,text="Detection",font=ctk.CTkFont(size=16,weight="bold")).grid(row=0,column=0,columnspan=4,sticky="w",padx=12,pady=(12,6))
         ctk.CTkCheckBox(general,text="Vehicles",variable=self.vehicle_var).grid(row=1,column=0,sticky="w",padx=12,pady=5)
@@ -579,6 +686,20 @@ class TitusUI:
         ctk.CTkLabel(tracking,text="Performance").grid(row=4,column=2,sticky="w",padx=12,pady=4)
         ctk.CTkComboBox(tracking,values=["Fast","Balanced","Maximum Accuracy"],variable=self.performance_var,width=180).grid(row=4,column=3,sticky="w",padx=8,pady=4)
         ctk.CTkCheckBox(tracking,text="Start monitoring when Titus opens",variable=self.auto_start_var).grid(row=5,column=0,columnspan=3,sticky="w",padx=12,pady=(6,12))
+
+        skysettings=ctk.CTkFrame(frame,corner_radius=12)
+        skysettings.pack(fill="x",padx=16,pady=6)
+        ctk.CTkLabel(skysettings,text="Sky & Storm",font=ctk.CTkFont(size=16,weight="bold")).pack(anchor="w",padx=12,pady=(12,6))
+        row=ctk.CTkFrame(skysettings,fg_color="transparent")
+        row.pack(fill="x",padx=8,pady=(0,8))
+        ctk.CTkCheckBox(row,text="Track visible weather",variable=self.weather_enabled_var).pack(side="left",padx=4)
+        ctk.CTkCheckBox(row,text="Detect lightning + save 5-second clips",variable=self.lightning_enabled_var).pack(side="left",padx=14)
+        ctk.CTkLabel(
+            skysettings,
+            text=("Strike clips are saved at the full resolution of the active camera feed. "
+                  "Maximum Accuracy mode requests 1920×1080 when the camera supports it."),
+            text_color="#9aa7b4",wraplength=930,justify="left"
+        ).pack(anchor="w",padx=12,pady=(0,12))
 
         zones=ctk.CTkFrame(frame,corner_radius=12)
         zones.pack(fill="x",padx=16,pady=6)
@@ -755,6 +876,11 @@ class TitusUI:
         s["night_threshold"]=float(self.night_threshold_var.get())
         s["performance_mode"]=self.performance_var.get()
         s["auto_start_monitoring"]=bool(self.auto_start_var.get())
+        s["weather_enabled"]=bool(self.weather_enabled_var.get())
+        s["lightning_enabled"]=bool(self.lightning_enabled_var.get())
+        # Titus intentionally keeps lightning clips at five seconds for a
+        # predictable pre/post-roll review experience.
+        s["lightning_clip_seconds"]=5.0
         self.settings.save()
         if not silent:
             self._flash_alert("Settings saved",level="notice")
@@ -865,6 +991,14 @@ class TitusUI:
                         self._refresh_events()
                     if self.current_view=="insights":
                         self._refresh_insights()
+                elif kind=="weather":
+                    self._handle_weather(payload)
+                elif kind=="lightning":
+                    self._handle_lightning(payload)
+                elif kind=="lightning_clip_ready":
+                    if self.current_view=="weather":
+                        self._refresh_weather_view()
+                    self._refresh_monitor_cards()
                 elif kind=="alert":
                     self._handle_alert(payload)
         except queue.Empty:
@@ -922,6 +1056,22 @@ class TitusUI:
         self.recent_activity.insert("1.0","\n".join(content))
         self.recent_activity.configure(state="disabled")
 
+    def _handle_weather(self,p):
+        self.current_weather=dict(p)
+        if hasattr(self,"today_cards"):
+            self.today_cards["weather"].configure(text=str(p.get("condition","Unknown")))
+        if self.current_view=="weather":
+            self._refresh_weather_view()
+
+    def _handle_lightning(self,p):
+        self._refresh_monitor_cards()
+        if self.current_view=="weather":
+            self._refresh_weather_view()
+        self._flash_alert(
+            f"⚡ Lightning detected • {p.get('strike_code','strike')} • 5-second clip recording",
+            level="warning"
+        )
+
     def _handle_alert(self,p):
         self._flash_alert(p.get("text","Activity detected"),p.get("level","notice"))
         if self.settings.data.get("sound_alerts",True) and winsound is not None:
@@ -954,6 +1104,8 @@ class TitusUI:
             "vehicles":str(s["vehicles"]),"people":str(s["people"]),"animals":str(s["animals"]),
             "driveway":str(s["driveway"]),
             "max_speed":f"{s['max_speed']:.0f} mph" if s["max_speed"] else "—",
+            "weather":str(self.current_weather.get("condition","Unknown")),
+            "lightning":str(self.db.lightning_stats_today()["count"]),
             "unreviewed":str(s["unreviewed"]),
         }
         for k,v in vals.items():
