@@ -13,7 +13,8 @@ from typing import Optional
 import cv2
 import customtkinter as ctk
 from PIL import Image, ImageTk
-import tkinter as tk\nfrom tkinter import filedialog, messagebox, simpledialog
+import tkinter as tk
+from tkinter import filedialog, messagebox, simpledialog
 
 try:
     import winsound
