@@ -327,6 +327,7 @@ class TitusUI:
         ctk.CTkButton(actions,text="Open photo",width=90,command=self.open_selected_photo).pack(side="left",padx=3)
         ctk.CTkButton(actions,text="★ Bookmark",width=90,command=self.bookmark_selected).pack(side="left",padx=3)
         ctk.CTkButton(actions,text="Add note",width=80,command=self.note_selected).pack(side="left",padx=3)
+        ctk.CTkButton(actions,text="Name / label",width=90,command=self.name_selected).pack(side="left",padx=3)
         ctk.CTkButton(detail,text="Mark reviewed",command=self.mark_selected_reviewed).pack(fill="x",padx=12,pady=(0,12))
 
     def _refresh_events(self):
@@ -531,6 +532,15 @@ class TitusUI:
         self.animal_var=ctk.BooleanVar(value=bool(s.get("monitor_animals",True)))
         self.voice_var=ctk.BooleanVar(value=bool(s.get("voice_alerts",True)))
         self.sound_var=ctk.BooleanVar(value=bool(s.get("sound_alerts",True)))
+        self.orientation_var=ctk.StringVar(value=str(s.get("tripwire_orientation","vertical")))
+        self.tripwire_var=ctk.DoubleVar(value=float(s.get("tripwire_position",50)))
+        self.speed_mode_var=ctk.StringVar(value=str(s.get("speed_mode","auto")))
+        self.speed_a_var=ctk.DoubleVar(value=float(s.get("speed_gate_a",35)))
+        self.speed_b_var=ctk.DoubleVar(value=float(s.get("speed_gate_b",65)))
+        self.speed_distance_var=ctk.DoubleVar(value=float(s.get("speed_distance_ft",30.0)))
+        self.night_threshold_var=ctk.DoubleVar(value=float(s.get("night_threshold",78)))
+        self.performance_var=ctk.StringVar(value=str(s.get("performance_mode","Balanced")))
+        self.auto_start_var=ctk.BooleanVar(value=bool(s.get("auto_start_monitoring",False)))
 
         ctk.CTkLabel(general,text="Detection",font=ctk.CTkFont(size=16,weight="bold")).grid(row=0,column=0,columnspan=4,sticky="w",padx=12,pady=(12,6))
         ctk.CTkCheckBox(general,text="Vehicles",variable=self.vehicle_var).grid(row=1,column=0,sticky="w",padx=12,pady=5)
@@ -545,6 +555,29 @@ class TitusUI:
         ctk.CTkSlider(general,from_=0.15,to=.70,variable=self.conf_var,width=240).grid(row=4,column=0,columnspan=2,sticky="w",padx=12,pady=(0,12))
         ctk.CTkLabel(general,text="Motion sensitivity").grid(row=3,column=2,sticky="w",padx=12,pady=(10,0))
         ctk.CTkSlider(general,from_=1,to=10,variable=self.motion_var,width=240).grid(row=4,column=2,columnspan=2,sticky="w",padx=12,pady=(0,12))
+
+        tracking=ctk.CTkFrame(frame,corner_radius=12)
+        tracking.pack(fill="x",padx=16,pady=6)
+        ctk.CTkLabel(tracking,text="Tracking, event line & speed",font=ctk.CTkFont(size=16,weight="bold")).grid(row=0,column=0,columnspan=5,sticky="w",padx=12,pady=(12,8))
+        ctk.CTkLabel(tracking,text="Traffic direction").grid(row=1,column=0,sticky="w",padx=12,pady=4)
+        ctk.CTkSegmentedButton(tracking,values=["vertical","horizontal"],variable=self.orientation_var).grid(row=1,column=1,sticky="w",padx=8,pady=4)
+        ctk.CTkLabel(tracking,text="Event line position").grid(row=1,column=2,sticky="w",padx=12,pady=4)
+        ctk.CTkSlider(tracking,from_=10,to=90,variable=self.tripwire_var,width=210).grid(row=1,column=3,sticky="w",padx=8,pady=4)
+
+        ctk.CTkLabel(tracking,text="Speed mode").grid(row=2,column=0,sticky="w",padx=12,pady=4)
+        ctk.CTkSegmentedButton(tracking,values=["auto","calibrated"],variable=self.speed_mode_var).grid(row=2,column=1,sticky="w",padx=8,pady=4)
+        ctk.CTkLabel(tracking,text="Gate A").grid(row=2,column=2,sticky="w",padx=12,pady=4)
+        ctk.CTkSlider(tracking,from_=5,to=95,variable=self.speed_a_var,width=210).grid(row=2,column=3,sticky="w",padx=8,pady=4)
+        ctk.CTkLabel(tracking,text="Gate B").grid(row=3,column=2,sticky="w",padx=12,pady=4)
+        ctk.CTkSlider(tracking,from_=5,to=95,variable=self.speed_b_var,width=210).grid(row=3,column=3,sticky="w",padx=8,pady=4)
+        ctk.CTkLabel(tracking,text="Actual A↔B feet").grid(row=3,column=0,sticky="w",padx=12,pady=4)
+        ctk.CTkEntry(tracking,textvariable=self.speed_distance_var,width=100).grid(row=3,column=1,sticky="w",padx=8,pady=4)
+
+        ctk.CTkLabel(tracking,text="Night threshold").grid(row=4,column=0,sticky="w",padx=12,pady=4)
+        ctk.CTkSlider(tracking,from_=35,to=130,variable=self.night_threshold_var,width=210).grid(row=4,column=1,sticky="w",padx=8,pady=4)
+        ctk.CTkLabel(tracking,text="Performance").grid(row=4,column=2,sticky="w",padx=12,pady=4)
+        ctk.CTkComboBox(tracking,values=["Fast","Balanced","Maximum Accuracy"],variable=self.performance_var,width=180).grid(row=4,column=3,sticky="w",padx=8,pady=4)
+        ctk.CTkCheckBox(tracking,text="Start monitoring when Titus opens",variable=self.auto_start_var).grid(row=5,column=0,columnspan=3,sticky="w",padx=12,pady=(6,12))
 
         zones=ctk.CTkFrame(frame,corner_radius=12)
         zones.pack(fill="x",padx=16,pady=6)
@@ -667,6 +700,26 @@ class TitusUI:
             self.db.set_note(self.selected_event_code,note)
             self._refresh_events()
 
+    def name_selected(self):
+        if not self.selected_event_code:
+            return
+        row=self.db.get_event(self.selected_event_code)
+        if not row:
+            return
+        current=row["display_name"] or ""
+        prompt="Name this recurring vehicle/animal:" if row["persistent_id"] else "Label this recorded event:"
+        name=simpledialog.askstring("Titus",prompt,initialvalue=current)
+        if name is None:
+            return
+        if row["persistent_id"]:
+            self.db.name_identity(row["persistent_id"],name)
+        self.db.set_display_name(self.selected_event_code,name)
+        self._flash_alert(f"Saved label: {name}",level="notice")
+        self._refresh_events()
+        refreshed=self.db.get_event(self.selected_event_code)
+        if refreshed:
+            self.select_event(dict(refreshed))
+
     def mark_selected_reviewed(self):
         if not self.selected_event_code:
             return
@@ -689,6 +742,18 @@ class TitusUI:
         s["monitor_animals"]=bool(self.animal_var.get())
         s["voice_alerts"]=bool(self.voice_var.get())
         s["sound_alerts"]=bool(self.sound_var.get())
+        s["tripwire_orientation"]=self.orientation_var.get()
+        s["tripwire_position"]=float(self.tripwire_var.get())
+        s["speed_mode"]=self.speed_mode_var.get()
+        s["speed_gate_a"]=float(self.speed_a_var.get())
+        s["speed_gate_b"]=float(self.speed_b_var.get())
+        try:
+            s["speed_distance_ft"]=max(1.0,float(self.speed_distance_var.get()))
+        except Exception:
+            s["speed_distance_ft"]=30.0
+        s["night_threshold"]=float(self.night_threshold_var.get())
+        s["performance_mode"]=self.performance_var.get()
+        s["auto_start_monitoring"]=bool(self.auto_start_var.get())
         self.settings.save()
         if not silent:
             self._flash_alert("Settings saved",level="notice")
@@ -793,6 +858,12 @@ class TitusUI:
                     self._handle_stats(payload)
                 elif kind=="event":
                     self._handle_event(payload)
+                elif kind=="speed_update":
+                    self._refresh_monitor_cards()
+                    if self.current_view=="events":
+                        self._refresh_events()
+                    if self.current_view=="insights":
+                        self._refresh_insights()
                 elif kind=="alert":
                     self._handle_alert(payload)
         except queue.Empty:
