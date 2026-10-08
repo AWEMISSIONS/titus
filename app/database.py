@@ -65,6 +65,27 @@ class TitusDatabase:
                     note TEXT DEFAULT ''
                 );
 
+                CREATE TABLE IF NOT EXISTS weather_samples (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    happened_at TEXT NOT NULL,
+                    condition TEXT NOT NULL,
+                    confidence REAL NOT NULL,
+                    brightness REAL NOT NULL,
+                    cloud_score REAL NOT NULL,
+                    rain_score REAL NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS lightning_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    strike_code TEXT UNIQUE,
+                    happened_at TEXT NOT NULL,
+                    confidence REAL NOT NULL,
+                    weather TEXT DEFAULT '',
+                    clip_path TEXT DEFAULT '',
+                    snapshot_path TEXT DEFAULT '',
+                    clip_saved INTEGER DEFAULT 0
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_events_time ON events(happened_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_events_category_time ON events(category, happened_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_events_pid ON events(persistent_id);
@@ -172,6 +193,89 @@ class TitusDatabase:
                 "INSERT INTO feedback(happened_at,kind,event_code,note) VALUES(?,?,?,?)",
                 (datetime.now().isoformat(timespec="seconds"), kind, event_code, note),
             )
+
+    def add_weather_sample(
+        self, condition: str, confidence: float, brightness: float,
+        cloud_score: float, rain_score: float
+    ):
+        with self.lock, self.conn:
+            self.conn.execute(
+                """INSERT INTO weather_samples(
+                    happened_at,condition,confidence,brightness,cloud_score,rain_score
+                ) VALUES(?,?,?,?,?,?)""",
+                (
+                    datetime.now().isoformat(timespec="seconds"),
+                    condition, float(confidence), float(brightness),
+                    float(cloud_score), float(rain_score),
+                ),
+            )
+
+    def add_lightning_event(
+        self, confidence: float, weather: str, clip_path: str, snapshot_path: str
+    ):
+        now = datetime.now().isoformat(timespec="seconds")
+        with self.lock, self.conn:
+            cur = self.conn.execute(
+                """INSERT INTO lightning_events(
+                    strike_code,happened_at,confidence,weather,clip_path,snapshot_path,clip_saved
+                ) VALUES(NULL,?,?,?,?,?,0)""",
+                (now, float(confidence), weather, clip_path, snapshot_path),
+            )
+            row_id = int(cur.lastrowid)
+            code = f"L-{row_id:05d}"
+            self.conn.execute(
+                "UPDATE lightning_events SET strike_code=? WHERE id=?",
+                (code, row_id),
+            )
+            return self.conn.execute(
+                "SELECT * FROM lightning_events WHERE id=?", (row_id,)
+            ).fetchone()
+
+    def mark_lightning_clip_saved(self, clip_path: str, saved: bool = True):
+        with self.lock, self.conn:
+            self.conn.execute(
+                "UPDATE lightning_events SET clip_saved=? WHERE clip_path=?",
+                (1 if saved else 0, clip_path),
+            )
+
+    def lightning_events(self, limit: int = 250):
+        with self.lock:
+            return self.conn.execute(
+                "SELECT * FROM lightning_events ORDER BY id DESC LIMIT ?",
+                (int(limit),),
+            ).fetchall()
+
+    def lightning_stats_today(self) -> dict:
+        today = datetime.now().date().isoformat()
+        with self.lock:
+            row = self.conn.execute(
+                """SELECT COUNT(*) n,
+                          AVG(confidence) avg_conf,
+                          SUM(clip_saved=1) clips
+                   FROM lightning_events
+                   WHERE substr(happened_at,1,10)=?""",
+                (today,),
+            ).fetchone()
+        return {
+            "count": int(row["n"] or 0),
+            "avg_confidence": float(row["avg_conf"] or 0.0),
+            "clips": int(row["clips"] or 0),
+        }
+
+    def weather_summary_today(self) -> dict:
+        today = datetime.now().date().isoformat()
+        with self.lock:
+            rows = self.conn.execute(
+                """SELECT condition, COUNT(*) n, AVG(confidence) conf
+                   FROM weather_samples
+                   WHERE substr(happened_at,1,10)=?
+                   GROUP BY condition
+                   ORDER BY n DESC""",
+                (today,),
+            ).fetchall()
+        counts = {str(r["condition"]): int(r["n"]) for r in rows}
+        dominant = rows[0]["condition"] if rows else "Unknown"
+        return {"dominant": dominant, "counts": counts}
 
     def create_identity(
         self, category: str, object_type: str, color: str,
