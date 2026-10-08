@@ -498,8 +498,9 @@ class TitusUI:
         repeat=self.db.top_repeat_vehicles(limit=3)
         parts=[]
         if s["total"]==0:
-            return "No events have been logged today yet. Once Titus starts recording activity, this panel will summarize the day automatically."
-        parts.append(f"Titus logged {s['vehicles']} vehicles, {s['people']} people, and {s['animals']} animals today.")
+            parts.append("No vehicle, person, or animal events have been logged today yet.")
+        else:
+            parts.append(f"Titus logged {s['vehicles']} vehicles, {s['people']} people, and {s['animals']} animals today.")
         if count:
             hour_text=datetime.strptime(str(hour),"%H").strftime("%-I %p") if os.name!="nt" else datetime.strptime(str(hour),"%H").strftime("%I %p").lstrip("0")
             parts.append(f"The busiest hour so far started around {hour_text}, with {count} events.")
@@ -1060,8 +1061,14 @@ class TitusUI:
         self.current_weather=dict(p)
         if hasattr(self,"today_cards"):
             self.today_cards["weather"].configure(text=str(p.get("condition","Unknown")))
-        if self.current_view=="weather":
-            self._refresh_weather_view()
+        if hasattr(self,"weather_cards"):
+            ls=self.db.lightning_stats_today()
+            self.weather_cards["condition"].configure(text=str(p.get("condition","Unknown")))
+            self.weather_cards["confidence"].configure(text=f"{float(p.get('confidence',0)):.0%}")
+            self.weather_cards["rain"].configure(text=f"{float(p.get('rain_score',0)):.0%}")
+            self.weather_cards["lightning"].configure(text=str(ls["count"]))
+            self.weather_cards["storm"].configure(text="ACTIVE" if p.get("storm_active") else "No")
+            self.weather_cards["clips"].configure(text=str(ls["clips"]))
 
     def _handle_lightning(self,p):
         self._refresh_monitor_cards()
