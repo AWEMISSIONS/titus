@@ -22,6 +22,7 @@ from vision import (
     crop_with_pad, estimate_color, fingerprint, fingerprint_similarity,
     night_enhance, quality_metrics,
 )
+from weather import SkyStormMonitor
 
 
 class TitusEngine:
@@ -42,8 +43,12 @@ class TitusEngine:
         self.model_path = app_dir / "yolo26n.pt"
         self.snapshot_dir = app_dir / "data" / "snapshots"
         self.identity_dir = app_dir / "data" / "identities"
+        self.lightning_clip_dir = app_dir / "data" / "lightning" / "clips"
+        self.lightning_snapshot_dir = app_dir / "data" / "lightning" / "snapshots"
         self.snapshot_dir.mkdir(parents=True, exist_ok=True)
         self.identity_dir.mkdir(parents=True, exist_ok=True)
+        self.lightning_clip_dir.mkdir(parents=True, exist_ok=True)
+        self.lightning_snapshot_dir.mkdir(parents=True, exist_ok=True)
 
         self.running = False
         self.thread: Optional[threading.Thread] = None
@@ -57,6 +62,13 @@ class TitusEngine:
         self.speed = AutoSpeedEstimator()
         self.headlights = HeadlightAssist()
         self.zones = ZoneManager(settings)
+        self.sky = SkyStormMonitor(
+            self.lightning_clip_dir,
+            self.lightning_snapshot_dir,
+            clip_seconds=float(settings.data.get("lightning_clip_seconds", 5.0)),
+            fps=float(settings.data.get("lightning_clip_fps", 15.0)),
+        )
+        self.last_weather_sample = 0.0
 
         self.track_seen: dict[int, int] = {}
         self.last_seen: dict[int, float] = {}
@@ -135,6 +147,7 @@ class TitusEngine:
         self.motion.reset()
         self.speed.reset()
         self.headlights.reset()
+        self.sky.reset()
         self.track_seen.clear()
         self.last_seen.clear()
         self.previous_center.clear()
@@ -168,8 +181,15 @@ class TitusEngine:
                 if not cap.isOpened():
                     cap.release()
                     continue
-                cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+                mode = self.settings.data.get("performance_mode", "Balanced")
+                if mode == "Maximum Accuracy":
+                    target_w, target_h = 1920, 1080
+                elif mode == "Fast":
+                    target_w, target_h = 960, 540
+                else:
+                    target_w, target_h = 1280, 720
+                cap.set(cv2.CAP_PROP_FRAME_WIDTH, target_w)
+                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, target_h)
                 cap.set(cv2.CAP_PROP_FPS, 30)
                 cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
                 ok, frame = cap.read()
@@ -258,6 +278,57 @@ class TitusEngine:
                 self.frame_count += 1
 
                 s = self.settings.data
+                now = time.time()
+
+                # Sky/weather and lightning monitoring runs directly from the raw
+                # camera so a strike can be captured even while YOLO is loading.
+                weather_state = None
+                if s.get("weather_enabled", True) or s.get("lightning_enabled", True):
+                    weather_state, strike, completed = self.sky.process(raw, now)
+
+                    if s.get("weather_enabled", True):
+                        sample_every = max(30.0, float(s.get("weather_sample_seconds", 120)))
+                        if now - self.last_weather_sample >= sample_every:
+                            self.last_weather_sample = now
+                            self.db.add_weather_sample(
+                                weather_state.condition,
+                                weather_state.confidence,
+                                weather_state.brightness,
+                                weather_state.cloud_score,
+                                weather_state.rain_score,
+                            )
+
+                    if strike is not None and s.get("lightning_enabled", True):
+                        row = self.db.add_lightning_event(
+                            strike["confidence"],
+                            strike["weather"],
+                            strike["clip_path"],
+                            strike["snapshot_path"],
+                        )
+                        payload = dict(row)
+                        payload.update(strike)
+                        self.event_queue.put(("lightning", payload))
+                        self.event_queue.put(("alert", {
+                            "level": "warning",
+                            "text": f"LIGHTNING DETECTED • strike {row['strike_code']} • clip recording",
+                            "speech": "Lightning detected.",
+                        }))
+
+                    for item in completed:
+                        self.db.mark_lightning_clip_saved(item["clip_path"], item["saved"])
+                        self.event_queue.put(("lightning_clip_ready", item))
+
+                    if self.frame_count % 10 == 0:
+                        self.event_queue.put(("weather", {
+                            "condition": weather_state.condition,
+                            "confidence": weather_state.confidence,
+                            "brightness": weather_state.brightness,
+                            "cloud_score": weather_state.cloud_score,
+                            "rain_score": weather_state.rain_score,
+                            "storm_active": weather_state.storm_active,
+                            "lightning_recent": self.sky.recent_lightning_count(1800),
+                        }))
+
                 enhanced, brightness, night_active, night_strength = night_enhance(
                     raw,
                     float(s.get("night_threshold", 78.0)),
@@ -275,6 +346,8 @@ class TitusEngine:
                     )
                     self.zones.draw(annotated)
                     self._draw_tripwire(annotated)
+                    if weather_state is not None:
+                        self._draw_weather(annotated, weather_state)
                     self._publish_frame(annotated)
                     if self.frame_count % 8 == 0:
                         self._publish_stats([], brightness, night_active, night_strength, quality)
@@ -296,7 +369,6 @@ class TitusEngine:
 
                 annotated = enhanced.copy()
                 detections: list[Detection] = []
-                now = time.time()
 
                 if results and results[0].boxes is not None and results[0].boxes.id is not None:
                     for box, tid_tensor in zip(results[0].boxes, results[0].boxes.id):
@@ -358,6 +430,8 @@ class TitusEngine:
 
                 self.zones.draw(annotated)
                 self._draw_tripwire(annotated)
+                if weather_state is not None:
+                    self._draw_weather(annotated, weather_state)
 
                 for det in detections:
                     self._process_event(enhanced, det)
@@ -627,6 +701,18 @@ class TitusEngine:
         self.track_event_id[det.track_id]=int(row["id"])
         self.track_event_code[det.track_id]=row["event_code"]
         self.event_queue.put(("event",dict(row)))
+
+    def _draw_weather(self, frame, state):
+        text = f"SKY {state.condition.upper()} {state.confidence:.0%}"
+        if state.rain_score > 0.20:
+            text += f"  •  rain {state.rain_score:.0%}"
+        lightning = self.db.lightning_stats_today()["count"]
+        if lightning:
+            text += f"  •  lightning today {lightning}"
+        (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, .55, 2)
+        x = max(8, frame.shape[1] - tw - 22)
+        cv2.rectangle(frame, (x-8, 8), (frame.shape[1]-8, 38), (18,18,18), -1)
+        cv2.putText(frame, text, (x, 30), cv2.FONT_HERSHEY_SIMPLEX, .55, (220,235,255), 2)
 
     def _draw_tripwire(self, frame):
         s=self.settings.data
