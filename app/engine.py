@@ -70,6 +70,9 @@ class TitusEngine:
         self.track_identity: dict[int, tuple[str, str, float]] = {}
         self.best_crop: dict[int, tuple[float, np.ndarray]] = {}
         self.speed_by_track: dict[int, tuple[float, float, str]] = {}
+        self.speed_prev_a: dict[int, int] = {}
+        self.speed_prev_b: dict[int, int] = {}
+        self.speed_first_cross: dict[int, tuple[str, float]] = {}
 
         self.fps_ema = 0.0
         self.infer_ms_ema = 0.0
@@ -144,6 +147,9 @@ class TitusEngine:
         self.track_identity.clear()
         self.best_crop.clear()
         self.speed_by_track.clear()
+        self.speed_prev_a.clear()
+        self.speed_prev_b.clear()
+        self.speed_first_cross.clear()
         self.frame_count = 0
         self.camera_fail_count = 0
         self.fps_ema = 0.0
@@ -339,8 +345,12 @@ class TitusEngine:
                             float(s.get("learning",{}).get("speed_scale",1.0)),
                             night_active,
                         )
-                        if auto is not None and s.get("speed_mode","auto") == "auto":
-                            self.speed_by_track[tid] = (auto[0], auto[1], "AUTO")
+                        if auto is not None and s.get("speed_mode","auto") in {"auto", "calibrated"}:
+                            # Keep AUTO as a fallback while waiting for a calibrated gate result.
+                            if self.speed_by_track.get(tid, (0,0,""))[2] != "CALIBRATED":
+                                self.speed_by_track[tid] = (auto[0], auto[1], "AUTO")
+                        if s.get("speed_mode","auto") == "calibrated":
+                            self._update_calibrated_speed(det, raw.shape)
                         if tid in self.speed_by_track:
                             det.speed_mph, det.speed_confidence, det.speed_source = self.speed_by_track[tid]
 
@@ -458,9 +468,75 @@ class TitusEngine:
         try:
             if temp.exists():
                 temp.replace(final)
+                self.db.update_identity_snapshot(row["code"], str(final))
         except Exception:
             pass
         self.track_identity[det.track_id]=(row["code"],"",0.0)
+
+    def _update_calibrated_speed(self, det: Detection, shape):
+        """Measure speed between two user-placed image gates with a known real distance."""
+        if det.category != "vehicle" or not det.is_moving:
+            return
+        s = self.settings.data
+        h, w = shape[:2]
+        orientation = s.get("tripwire_orientation", "vertical")
+        coord = det.center[0] if orientation == "vertical" else det.center[1]
+        length = w if orientation == "vertical" else h
+        a = int(length * float(s.get("speed_gate_a", 35)) / 100.0)
+        b = int(length * float(s.get("speed_gate_b", 65)) / 100.0)
+        side_a = -1 if coord < a else 1
+        side_b = -1 if coord < b else 1
+
+        prev_a = self.speed_prev_a.get(det.track_id)
+        prev_b = self.speed_prev_b.get(det.track_id)
+        self.speed_prev_a[det.track_id] = side_a
+        self.speed_prev_b[det.track_id] = side_b
+
+        crossed = None
+        if prev_a is not None and prev_a != side_a:
+            crossed = "A"
+        elif prev_b is not None and prev_b != side_b:
+            crossed = "B"
+        if crossed is None:
+            return
+
+        now = time.perf_counter()
+        first = self.speed_first_cross.get(det.track_id)
+        if first is None:
+            self.speed_first_cross[det.track_id] = (crossed, now)
+            return
+        first_gate, first_time = first
+        if first_gate == crossed:
+            return
+
+        elapsed = now - first_time
+        distance_ft = float(s.get("speed_distance_ft", 30.0))
+        if not (0.08 <= elapsed <= 12.0) or distance_ft <= 0:
+            return
+        mph = (distance_ft / elapsed) * 0.6818181818
+        if not 0.5 <= mph <= 160.0:
+            return
+
+        auto_before = self.speed_by_track.get(det.track_id)
+        self.speed_by_track[det.track_id] = (float(mph), 0.95, "CALIBRATED")
+
+        # Use strong gate measurements to gently tune future AUTO estimates for this camera.
+        if auto_before and auto_before[2] == "AUTO" and auto_before[0] > 1:
+            ratio = max(0.55, min(1.8, mph / auto_before[0]))
+            learning = s.setdefault("learning", {})
+            old = float(learning.get("speed_scale", 1.0))
+            learning["speed_scale"] = old * 0.85 + ratio * 0.15
+            self.settings.save()
+
+        event_id = self.track_event_id.get(det.track_id)
+        if event_id:
+            self.db.update_speed(event_id, mph, "CALIBRATED", 0.95)
+            self.event_queue.put(("speed_update", {
+                "event_id": event_id,
+                "speed_mph": mph,
+                "speed_source": "CALIBRATED",
+                "speed_confidence": 0.95,
+            }))
 
     def _process_event(self, frame, det: Detection):
         tid=det.track_id
@@ -557,12 +633,29 @@ class TitusEngine:
         h,w=frame.shape[:2]
         pct=float(s.get("tripwire_position",50))/100.0
         color=(0,225,255)
-        if s.get("tripwire_orientation","vertical")=="vertical":
+        orientation = s.get("tripwire_orientation","vertical")
+        if orientation=="vertical":
             x=int(w*pct); cv2.line(frame,(x,0),(x,h),color,2)
             cv2.putText(frame,"EVENT LINE",(min(x+8,w-150),28),cv2.FONT_HERSHEY_SIMPLEX,.55,color,2)
         else:
             y=int(h*pct); cv2.line(frame,(0,y),(w,y),color,2)
             cv2.putText(frame,"EVENT LINE",(10,max(22,y-8)),cv2.FONT_HERSHEY_SIMPLEX,.55,color,2)
+
+        if s.get("speed_mode","auto") == "calibrated":
+            gate_a = float(s.get("speed_gate_a",35))/100.0
+            gate_b = float(s.get("speed_gate_b",65))/100.0
+            if orientation=="vertical":
+                xa, xb = int(w*gate_a), int(w*gate_b)
+                cv2.line(frame,(xa,0),(xa,h),(255,140,0),2)
+                cv2.line(frame,(xb,0),(xb,h),(255,0,180),2)
+                cv2.putText(frame,"SPEED A",(min(xa+5,w-100),50),cv2.FONT_HERSHEY_SIMPLEX,.50,(255,140,0),2)
+                cv2.putText(frame,"SPEED B",(min(xb+5,w-100),72),cv2.FONT_HERSHEY_SIMPLEX,.50,(255,0,180),2)
+            else:
+                ya, yb = int(h*gate_a), int(h*gate_b)
+                cv2.line(frame,(0,ya),(w,ya),(255,140,0),2)
+                cv2.line(frame,(0,yb),(w,yb),(255,0,180),2)
+                cv2.putText(frame,"SPEED A",(10,max(40,ya-6)),cv2.FONT_HERSHEY_SIMPLEX,.50,(255,140,0),2)
+                cv2.putText(frame,"SPEED B",(10,max(62,yb-6)),cv2.FONT_HERSHEY_SIMPLEX,.50,(255,0,180),2)
 
     def _draw_detection(self, frame, det: Detection):
         x1,y1,x2,y2=det.xyxy
@@ -603,6 +696,9 @@ class TitusEngine:
             self.track_identity.pop(tid,None)
             self.best_crop.pop(tid,None)
             self.speed_by_track.pop(tid,None)
+            self.speed_prev_a.pop(tid,None)
+            self.speed_prev_b.pop(tid,None)
+            self.speed_first_cross.pop(tid,None)
             self.logged_tracks.discard(tid)
             self.person_logged.discard(tid)
             self.animal_logged.discard(tid)
