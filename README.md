@@ -12,7 +12,7 @@ Titus was designed from the lessons learned while building StreetWatch, but it i
 - **Day / night pipeline** — automatic low-light enhancement and moving-headlight assist.
 - **Local AI** — normal camera processing, event history, snapshots, and statistics stay on the PC.
 - **Event Inbox** — review vehicles, people, and animals in one searchable timeline.
-- **Daily dashboard** — today’s totals, estimated speeds, busiest hour, driveway activity, repeat IDs, and system health.
+- **Daily dashboard** — today’s totals, estimated speeds, busiest hour, driveway activity, repeat IDs, system health, current visual weather, and lightning count.
 - **Persistent vehicle / animal IDs** — likely-repeat matching for vehicles and animals, with confidence rather than false certainty.
 - **Person visit events** — people get event IDs and snapshots; Titus does not automatically identify people by face.
 - **Zones** — ROAD, DRIVEWAY, SIDEWALK, and IGNORE areas.
@@ -20,6 +20,10 @@ Titus was designed from the lessons learned while building StreetWatch, but it i
 - **Best-frame snapshots** — Titus keeps the clearest crop it sees during the track.
 - **Adaptive tuning** — “false alarm” and “missed event” feedback gently tunes detection parameters for that fixed camera.
 - **Camera health** — live FPS, inference time, brightness, blur/quality, reconnect state.
+- **Sky & Storm** — camera-based Sunny / Cloudy / Rainy / Night / Thunderstorm estimates with confidence.
+- **Lightning counter** — detects likely scene-wide lightning flashes and counts them by day.
+- **5-second lightning clips** — saves a high-quality still plus a 5-second pre/post-roll clip at the full resolution of the active camera feed.
+- **Lightning history** — dedicated page with strike IDs, time, weather estimate, confidence, photo, and playable clip.
 - **One-click fullscreen** — turn the app into a clean live monitor.
 - **CSV export + local backup** — your history remains portable.
 
@@ -57,4 +61,4 @@ Titus can detect and log people, save a snapshot, and assign a visit/event ID. I
 
 ## Status
 
-Current repo target: **Titus 1.0 — Daily Monitor**
+Current repo target: **Titus 1.1 — Sky & Storm**
