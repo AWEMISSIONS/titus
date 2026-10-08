@@ -16,7 +16,7 @@ jobs:
       - name: Python syntax check
         shell: pwsh
         run: |
-          python -m py_compile app/main.py app/ui.py app/engine.py app/vision.py app/database.py app/settings.py app/camera_diagnostics.py
+          python -m py_compile app/main.py app/ui.py app/engine.py app/vision.py app/weather.py app/database.py app/settings.py app/camera_diagnostics.py
       - name: Core database/settings smoke test
         shell: pwsh
         run: |
