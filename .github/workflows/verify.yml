@@ -1,0 +1,24 @@
+name: Verify Titus
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+
+jobs:
+  syntax-and-core:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Python syntax check
+        shell: pwsh
+        run: |
+          python -m py_compile app/main.py app/ui.py app/engine.py app/vision.py app/database.py app/settings.py app/camera_diagnostics.py
+      - name: Core database/settings smoke test
+        shell: pwsh
+        run: |
+          $env:PYTHONPATH = "$pwd\app"
+          python -c "from pathlib import Path; import tempfile; from settings import SettingsStore; from database import TitusDatabase; p=Path(tempfile.mkdtemp()); s=SettingsStore(p/'settings.json'); s.save(); d=TitusDatabase(p/'titus.db'); r=d.add_event(category='vehicle',object_type='Car',confidence=.9,color='Blue'); assert r['event_code'].startswith('V-'); assert d.stats_for_day()['vehicles']==1; d.close(); print('core smoke test passed')"
