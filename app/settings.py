@@ -25,6 +25,11 @@ DEFAULT_SETTINGS = {
     "retention_days": 30,
     "performance_mode": "Balanced",
     "auto_start_monitoring": False,
+    "weather_enabled": True,
+    "lightning_enabled": True,
+    "weather_sample_seconds": 120,
+    "lightning_clip_seconds": 5.0,
+    "lightning_clip_fps": 15.0,
     "zones": {
         "road": None,
         "driveway": None,
