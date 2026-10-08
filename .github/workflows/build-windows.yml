@@ -1,0 +1,56 @@
+name: Build Titus for Windows
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip wheel
+          python -m pip install -r requirements.txt
+          python -m pip install pyinstaller
+
+      - name: Prepare local AI model
+        shell: pwsh
+        run: |
+          python -c "from ultralytics import YOLO; YOLO('yolo26n.pt'); print('model ready')"
+
+      - name: Build Titus
+        shell: cmd
+        run: >
+          pyinstaller --noconfirm --windowed --name Titus
+          --collect-all ultralytics
+          --collect-all torch
+          --collect-all torchvision
+          --collect-all customtkinter
+          --collect-all pyttsx3
+          --add-data "yolo26n.pt;."
+          app\main.py
+
+      - name: Add launch helper
+        shell: pwsh
+        run: |
+          Set-Content -Path dist/Titus/RUN_TITUS.bat -Encoding ASCII -Value '@echo off'
+          Add-Content -Path dist/Titus/RUN_TITUS.bat -Encoding ASCII -Value 'cd /d "%~dp0"'
+          Add-Content -Path dist/Titus/RUN_TITUS.bat -Encoding ASCII -Value 'start "" Titus.exe'
+
+      - name: Upload Windows app
+        uses: actions/upload-artifact@v4
+        with:
+          name: Titus-Windows
+          path: dist/Titus/
+          if-no-files-found: error
+          retention-days: 30
