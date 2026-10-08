@@ -1,2 +1,2 @@
-Titus 1.0 — Daily Monitor
-Windows-first local AI monitoring and statistics dashboard
+Titus 1.1 — Sky & Storm
+Windows-first local AI monitoring, statistics, weather, and lightning capture dashboard
