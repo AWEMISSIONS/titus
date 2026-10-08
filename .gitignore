@@ -1,0 +1,16 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+yolo26n.pt
+yolo11n.pt
+data/*.db
+data/*.json
+data/snapshots/*
+!data/snapshots/.keep
+data/identities/*
+!data/identities/.keep
+build/
+dist/
+*.spec
