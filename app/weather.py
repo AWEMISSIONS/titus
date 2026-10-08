@@ -49,6 +49,7 @@ class SkyStormMonitor:
         self.last_condition = "Unknown"
         self.condition_ema: dict[str, float] = {}
         self.last_state = WeatherState("Unknown", 0.0, 0.0, 0.0, 0.0, False)
+        self.last_weather_calc = 0.0
 
         self.prev_gray: Optional[np.ndarray] = None
         self.rain_history: deque[float] = deque(maxlen=20)
@@ -61,6 +62,7 @@ class SkyStormMonitor:
         self.baseline_brightness = None
         self.prev_gray = None
         self.rain_history.clear()
+        self.last_weather_calc = 0.0
 
     def lightning_today(self) -> int:
         now = time.time()
@@ -76,7 +78,13 @@ class SkyStormMonitor:
         completed = []
 
         self._buffer_frame(frame, now)
-        state = self._estimate_weather(frame, now)
+        # Weather classification is slower than flash detection; update the
+        # label about once per second while checking lightning every frame.
+        if now - self.last_weather_calc >= 0.75 or self.last_state.condition == "Unknown":
+            state = self._estimate_weather(frame, now)
+            self.last_weather_calc = now
+        else:
+            state = self.last_state
         strike = self._detect_lightning(frame, now, state)
 
         if strike is not None:
