@@ -13,7 +13,7 @@ from typing import Optional
 import cv2
 import customtkinter as ctk
 from PIL import Image, ImageTk
-from tkinter import filedialog, messagebox, simpledialog
+import tkinter as tk\nfrom tkinter import filedialog, messagebox, simpledialog
 
 try:
     import winsound
@@ -434,7 +434,7 @@ class TitusUI:
         right.pack(side="left",fill="both",expand=True,padx=(6,0))
 
         ctk.CTkLabel(left,text="Hourly activity",font=ctk.CTkFont(size=16,weight="bold")).pack(anchor="w",padx=12,pady=(12,4))
-        self.hourly_canvas=ctk.CTkCanvas(left,height=250,bg="#151b24",highlightthickness=0)
+        self.hourly_canvas=tk.Canvas(left,height=250,bg="#151b24",highlightthickness=0)
         self.hourly_canvas.pack(fill="x",padx=12,pady=(0,12))
 
         ctk.CTkLabel(right,text="Titus daily brief",font=ctk.CTkFont(size=16,weight="bold")).pack(anchor="w",padx=12,pady=(12,4))
