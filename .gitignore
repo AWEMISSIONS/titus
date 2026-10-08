@@ -14,3 +14,8 @@ data/identities/*
 build/
 dist/
 *.spec
+
+data/lightning/clips/*
+!data/lightning/clips/.keep
+data/lightning/snapshots/*
+!data/lightning/snapshots/.keep
